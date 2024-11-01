@@ -4,7 +4,7 @@ using namespace Rcpp;
 // Define g, f, u, and integrand functions
 
 // [[Rcpp::export]]
-double g(double x, double rho) {
+double g(double x, double rho) {  
   return exp(-rho * x);
 }
 
@@ -19,7 +19,7 @@ double u(double x) {
 }
 
 // [[Rcpp::export]]
-double integrand(double x, double rho, double lambda) {
+double integrand(double x, double rho, double lambda) { // This function combines the three other functions into a single integrand. I split them up for tractability.
   return g(x, rho) * u(f(x, lambda));
 }
 
@@ -48,7 +48,7 @@ double midpoint_rule(NumericVector t_seq, double rho, double lambda) {
     // Midpoint loop
     for (int i = 1; i < t_seq.size(); i++) {
       double mid_point = (integrand(t_seq[i], rho, lambda) + integrand(t_seq[i - 1], rho, lambda))/2;
-      double slice = (t_seq[i] - t_seq[i-1]) * mid_point; // pass rho and lambda
+      double slice = (t_seq[i] - t_seq[i-1]) * mid_point; 
       V_trapezoid += slice;
     }
     
@@ -61,10 +61,10 @@ double simpson_rule(NumericVector t_seq, double rho, double lambda) {
   // Initialize variables
   double V_simpson = 0.0;
   
-  // Midpoint loop
+  // Simpson loop
   for (int i = 1; i < t_seq.size(); i++) {
-    double mid_point = (integrand(t_seq[i], rho, lambda) + 4*integrand((t_seq[i] + t_seq[i - 1])/2, rho, lambda) + integrand(t_seq[i - 1], rho, lambda))/6;
-    double slice = (t_seq[i] - t_seq[i-1]) * mid_point; // pass rho and lambda
+    double simpson = (integrand(t_seq[i], rho, lambda) + 4*integrand((t_seq[i] + t_seq[i - 1])/2, rho, lambda) + integrand(t_seq[i - 1], rho, lambda))/6; //note that the formula is DIFFERENT than that found in the 
+    double slice = (t_seq[i] - t_seq[i-1]) * simpson; 
     V_simpson += slice;
   }
   
@@ -77,6 +77,8 @@ double obj_function(double x, double y) {
   return 100 * (y - (x * x)) * (y - (x * x)) + (1 - x) * (1 - x);
 }
 
+
+// Question 3
 // Derivative and Hessian Calculation
 // [[Rcpp::export]]
 List derivative_and_hessian(NumericVector x_vec, NumericVector y_vec, double epsilon) {
@@ -130,9 +132,10 @@ List derivative_and_hessian(NumericVector x_vec, NumericVector y_vec, double eps
                       Named("hessian_yy") = hessian_yy);
 }
 
+// Question 4
 
 // Utility function u
-double u3(double x, double alpha, double omega) {
+double u3(double x, double alpha, double omega) { // named to differentiate from other u function
   return alpha * pow(x, 1 + omega) / (1 + omega);
 }
 
@@ -146,7 +149,7 @@ NumericMatrix grid_search(NumericMatrix e_mat, NumericVector alpha, NumericMatri
   
   // sum up endowment by column (represents goods)
   
-  double e = 0;
+  double e = 0; // initialize as empty variable
   
   for (int k = 0; k < 3; k++) {
     e += e_mat(k, index);

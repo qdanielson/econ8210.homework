@@ -387,7 +387,7 @@ output_opt <- matrix(c(l_grad,l_conj,l_nr,l_bfgs,t_grad,t_conj,t_nr,t_bfgs),nrow
 colnames(output_opt) <- c("Iterations","Time")
 rownames(output_opt) <- c("Gradient Descent","Conjugate Descent","Newton-Raphson","BFGS")
 
-## Problem 3 - Grid Search Optimization (INCOMPLETE)
+## Problem 3 - Grid Search Optimization
 
 # Initialize grid
 
@@ -397,13 +397,13 @@ split <- seq(0,1,precision)
 create_params <- function(agent_count,
                           benchmark) {
 
-  if (benchmark == TRUE) {
+  if (benchmark == TRUE) { # even parameters
     
     alpha <- rep(1,agent_count)
     lambda <- rep(1,agent_count)
     omega <- matrix(rep(-.5,agent_count*agent_count),nrow = agent_count)
     
-  } else {
+  } else { # varied parameters
     
     alpha <- runif(agent_count) + 1
     lambda <- runif(agent_count) + 1
@@ -429,6 +429,9 @@ alpha_even <- params_even$alpha
 omega_even <- params_even$omega
 lambda_even <- params_even$lambda
 
+
+# I tried to randomize, but decided against it for simplicity
+
 alpha_vary <- c(.9,1,1.1)
 omega_vary <- -matrix(c(.4,.5,.6,
                         .6,.5,.4,
@@ -437,6 +440,8 @@ omega_vary <- -matrix(c(.4,.5,.6,
                       ncol = 3,
                       byrow = TRUE)
 lambda_vary <- c(.9,1,1.1)
+
+# conduct grid search (written in C++), grid is defined along two dimensions, where the first dimension is the share given to agent 1, and the second dimension is the share of remaining consumption given to agent 2.
 
 for (i in 0:2) {
   
@@ -509,13 +514,13 @@ f.even <- function(point) {
   
   theta <- point[3:5]
   
-  ptheta <- p %*% t(theta)
+  ptheta <- p %*% t(theta) # calculate composite p.theta value
   
-  x.guess <- (1/alpha_mat) * ptheta^omega
+  x.guess <- (1/alpha_mat) * ptheta^omega # consumption guess conditional on point values
   
-  x.error <- x - x.guess
+  x.error <- x - x.guess # market clearing
   
-  p.error <- (e_mat %*% p) - (x.guess %*% p)
+  p.error <- (e_mat %*% p) - (x.guess %*% p) # agent budget constraint
   
   return(c(x.error,p.error))
   
@@ -535,17 +540,19 @@ f.vary <- function(point) {
   
   theta <- point[3:5]
   
-  ptheta <- p %*% t(theta)
+  ptheta <- p %*% t(theta) # calculate composite p.theta value
   
-  x.guess <- (1/alpha_mat) * ptheta^omega
+  x.guess <- (1/alpha_mat) * ptheta^omega # consumption guess conditional on point values
   
-  x.error <- colSums(x - x.guess)
+  x.error <- colSums(x - x.guess) # market clearing
   
-  p.error <- (e_mat %*% p) - (x.guess %*% p)
+  p.error <- (e_mat %*% p) - (x.guess %*% p) # agent budget constraint
   
   return(c(x.error,p.error))
   
 }
+
+## Solve nonlinear equations
 
 fsolve(f.even,c(1.1,   # price 2
                 1.1,   # price 3
