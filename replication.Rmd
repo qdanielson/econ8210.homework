@@ -1,0 +1,623 @@
+---
+title: "Replication"
+author: "Quinn Danielson"
+date: "2025-01-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# packages
+library(xgboost)  
+library(dplyr)    
+library(caret)    
+library(pROC)
+library(ggplot2)
+library(ParBayesianOptimization)
+
+setwd("C:/Users/qdani/OneDrive/Documents/grad_school/coursework/ECON8210/replication")
+
+```
+
+## Introduction
+
+This file contains a replication of the key computational steps in Fintech Lending to Borrowers with No Credit History, by Chioda et al. This paper was published as an NBER working paper this fall and builds on previous work using machine learning methods to assess the creditworthiness of borrowers without credit scores. To do this, the authors use a standard machine learning algorithm called XGBoost, which is ideal for binary classification problems. The authors find that their data (microdata from a Fintech in Mexico) can predict creditworthiness using the machine learning approach.
+
+More important for this assignment is the empirical methodology. The authors use the standard XGBoost algorithm to build a model that predicts the chance that an approved credit card customer will default on the loan. They train three models – one for men, one for women, and a pooled model. The hyperparameters of these models are set using Bayesian optimization techniques. The authors proceed to analyze individual feature performance and compare the relative performance of the pooled and gender-segregated models.
+
+I replicated core parts of this methodology. It was not feasible to replicate the entire paper due to limits in computational power and time. My replication proceeds in four steps:
+
+1.	Data generation—this is fake data based on the summary statistics in tables 2 and A.2. The data generation is a rough approximation of the real data. I tweaked the generation as necessary to prevent any one element from being too strong a signal of default.
+
+2.	Bayesian hyperparameter optimization. I independently optimize hyperparameters for the male, female, and pooled models. I do this using the “ParBayesianOptimization” R package, which is similar to the “hyperopt” python library. I do this optimization for a selection of the hyperparameters of interest due to computational constraints.
+
+3.	I train three models according to the procedure in the paper. 80% of the data is used as a training set—the points in the training and test sets are constant across all three models.
+
+4.	I plot the receiver operating characteristic curves and the scatterplot of pooled and gender-specific predictions.
+The results below do not have an economic interpretation, but the procedure used is a good approximation of the authors’ approach.
+
+## Data Generating Process
+
+The code used to generate the data is reproduced below as a comment. The variables are:
+
+- User age
+
+- Mobile operating system (iOS or Android)
+
+- No-hit score (Rough credit score proxy)
+
+- Number of orders in fintech app
+
+- proportion of orders paid in cash
+
+- Median amount per order in MXN
+
+- Proportion of orders are supermarket/pharmacies/food establishments
+
+- SES index of census tract
+
+- Years of schooling for people age 15 or above in census tract
+
+- Proportion of households owning a motor vehicle in census tract
+
+```{r dgp}
+# Generate Panel Data
+
+# # Set number of agents
+# n = 123000
+# 
+# # Set default probability of 10% among approved users, independent of gender
+# y <- sample(c(rep(0,9),1),n,replace = TRUE)
+# 
+# # Set gender shares , 1 = male, 0 = female
+# gender <- sample(c(0,1),n,replace = TRUE, prob = c(.38,.62))
+# 
+# #Assemble into panel
+# panel <- data.frame(y, # Default outcome
+#                     gender,
+#                     age=vector(length=n), #Starting here, empty vectors
+#                     ios=vector(length=n),
+#                     nohit=vector(length=n),
+#                     num_ord=vector(length=n),
+#                     cash_p=vector(length=n),
+#                     med_amt=vector(length=n),
+#                     supm_p=vector(length=n),
+#                     phrm_p=vector(length=n),
+#                     rest_p=vector(length=n),
+#                     ses=vector(length=n),
+#                     years_ed=vector(length=n),
+#                     mveh_p=vector(length=n)
+#                     )
+# 
+# # Approximation -- eyeballed it
+# for (i in 1:n) {
+#   
+#   slice <- panel[i,]
+#   default <- slice$y
+#   gender <- slice$gender
+#   
+#              if(default == 1 & gender == 1){
+#     slice$ios = sample(c(0,1),size = 1,prob = c(.83,.17))
+#     slice$age = max(rnorm(1,23.3,7.3),18)
+#     slice$nohit = rnorm(1,630,18)
+#     slice$num_ord = rnorm(1,10,3) + runif(1,0,45)
+#     slice$cash_p = max(min(rnorm(1,.81,.36),1),0)
+#     slice$med_amt = rnorm(1,200,50) + runif(1,0,350)
+#     slice$supm_p = rnorm(1,.05,.01) + runif(1,0,.1)
+#     slice$phrm_p = rnorm(1,.05,.01) + runif(1,0,.08)
+#     slice$rest_p = min(rnorm(1,.83,.27),1)
+#     slice$ses = rnorm(1,.96,.01)
+#     slice$years_ed = rnorm(1,11,1.7)
+#     slice$mveh_p = rnorm(1,.52,.17)
+#       } else if(default == 0 & gender == 1){
+#     slice$ios = sample(c(0,1),size = 1,prob = c(.64,.36))
+#     slice$age = max(rnorm(1,24.8,8.3),18)
+#     slice$nohit = rnorm(1,641,20.7)
+#     slice$num_ord = rnorm(1,10,3) + runif(1,0,45)
+#     slice$cash_p = min(max(rnorm(1,.48,.36),0),1)
+#     slice$med_amt = rnorm(1,150,50) + runif(1,0,300)
+#     slice$supm_p = rnorm(1,.06,.01) + runif(1,0,.1)
+#     slice$phrm_p = rnorm(1,.06,.01) + runif(1,0,.08)
+#     slice$rest_p = min(rnorm(1,.79,.27),1)
+#     slice$ses = rnorm(1,.97,.01)
+#     slice$years_ed = rnorm(1,12.5,1.7)
+#     slice$mveh_p = rnorm(1,.64,.17)
+#       } else if (default == 1 & gender == 0){
+#     slice$ios = sample(c(0,1),size = 1,prob = c(.79,.21))
+#     slice$age = max(rnorm(1,24.8,7.3),18)
+#     slice$nohit = rnorm(1,630,18)
+#     slice$num_ord = rnorm(1,11,3) + runif(1,0,45)
+#     slice$cash_p = max(min(rnorm(1,.81,.36),1),0)
+#     slice$med_amt = rnorm(1,200,50) + runif(1,0,350)
+#     slice$supm_p = rnorm(1,.05,.01) + runif(1,0,.1)
+#     slice$phrm_p = rnorm(1,.05,.01) + runif(1,0,.08)
+#     slice$rest_p = min(rnorm(1,.83,.27),1)
+#     slice$ses = rnorm(1,.96,.01)
+#     slice$years_ed = rnorm(1,11,1.7)
+#     slice$mveh_p = rnorm(1,.52,.17)
+#       } else if (default == 0 & gender == 0){
+#     slice$ios = sample(c(0,1),size = 1,prob = c(.58,.42))
+#     slice$age = max(rnorm(1,25.8,8.3),18)
+#     slice$nohit = rnorm(1,641,20.7)
+#     slice$num_ord = rnorm(1,12,3) + runif(1,0,45)
+#     slice$cash_p = min(max(rnorm(1,.48,.36),0),1)
+#     slice$med_amt = rnorm(1,150,50) + runif(1,0,300)
+#     slice$supm_p = rnorm(1,.06,.01) + runif(1,0,.1)
+#     slice$phrm_p = rnorm(1,.06,.01) + runif(1,0,.08)
+#     slice$rest_p = min(rnorm(1,.79,.27),1)
+#     slice$ses = rnorm(1,.97,.01)
+#     slice$years_ed = rnorm(1,12.5,1.7)
+#     slice$mveh_p = rnorm(1,.64,.17)
+#       }
+#     
+#   
+#   panel[i,] <- slice
+#   
+#   print(i)
+#   
+# }
+```
+
+## Bayesian Optimization
+
+Bayesian Optimization was performed using the R package "ParBayesianOptimization", which implements the methods of Practical Bayesian Optimization of Machine Learning Algorithms by Snoek et al. This method is a Gaussian Bayesian optimization algorithm. The original authors, Chioda et al., use "hyperopt" in python--the paper this library implments, Hyperopt: A Python Library for Optimizing the Hyperparameters of Machine Learning Algorithms by Bergstra et al. references Snoek et al. as an algorithm they would like to implement in their library. Therefore, I believe that this package is a good choice to approximate the process used by the authors. The code is included as a comment below and the final parameters are printed.
+
+The hyperparameters I tune are:
+
+-max_depth is the maximum depth of a decision tree in an XGBoost model
+
+-eta is the rate at which feature weights deteriorate so that the algorithm becomes more conservative as the number of iterations increase
+
+-subsample is the share of data that are subsampled every boosting iteration
+
+-colsample_bytree is the subsample ratio for the columns of data used in the generation of each tree.
+
+-min_child_weight determines the stopping point of partitioning data in trees.
+
+```{r bayes}
+# # set working directory
+# setwd("C:/Users/qdani/OneDrive/Documents/grad_school/coursework/ECON8210/replication")
+# 
+# # Set seed for reproducibility
+# set.seed(123)
+# 
+# panel <- readRDS("panel.RDS")
+# 
+# ## arrange for grouping
+# panel <- panel %>% arrange(gender)
+# 
+# # Add unique identifier to the dataset
+# panel$id <- 1:nrow(panel)
+# 
+# # tabulate count by gender
+# table(panel$gender)
+# 
+# # Result:
+# # 0     1 
+# # 46731 76269
+# 
+# f_indices <- 1:46731
+# m_indices <- 46732:123000
+# 
+# panel_f <- panel[f_indices,]
+# panel_m <- panel[m_indices,]
+# 
+# # Pull
+# y <- panel$y
+# 
+# # Train-test split
+# train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+# 
+# # Exclude the "id" and "y" column for training and testing
+# X_train <- panel[train_index, !(names(panel) %in% c("id","y"))]
+# y_train <- y[train_index]
+# X_test <- panel[-train_index, !(names(panel) %in% c("id","y"))]
+# y_test <- y[-train_index]
+# 
+# # Convert to xgb.DMatrix format
+# dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
+# dtest <- xgb.DMatrix(data = as.matrix(X_test), label = y_test)
+# 
+# # Female-specific train-test split
+# train_index_f <- train_index[train_index %in% f_indices]
+# test_index_f <- f_indices[!(f_indices %in% train_index_f)]
+# 
+# # Exclude "id" and "y" columns for female data
+# X_train_f <- panel[train_index_f, !(names(panel) %in% c("id", "y"))]
+# y_train_f <- y[train_index_f]
+# X_test_f <- panel[test_index_f, !(names(panel) %in% c("id", "y"))]
+# y_test_f <- y[test_index_f]
+# 
+# # Convert female data to xgb.DMatrix format
+# dtrain_f <- xgb.DMatrix(data = as.matrix(X_train_f), label = y_train_f)
+# dtest_f <- xgb.DMatrix(data = as.matrix(X_test_f), label = y_test_f)
+# 
+# # Male-specific train-test split
+# train_index_m <- train_index[train_index %in% m_indices]
+# test_index_m <- m_indices[!(m_indices %in% train_index_m)]
+# 
+# # Exclude "id" and "y" columns for male data
+# X_train_m <- panel[train_index_m, !(names(panel) %in% c("id", "y"))]
+# y_train_m <- y[train_index_m]
+# X_test_m <- panel[test_index_m, !(names(panel) %in% c("id", "y"))]
+# y_test_m <- y[test_index_m]
+# 
+# # Convert male data to xgb.DMatrix format
+# dtrain_m <- xgb.DMatrix(data = as.matrix(X_train_m), label = y_train_m)
+# dtest_m <- xgb.DMatrix(data = as.matrix(X_test_m), label = y_test_m)
+# 
+# # Define the search space
+# search_space <- list(
+#   max_depth = c(1, 100),
+#   eta = c(exp(-9), exp(0)),  # Log-uniform
+#   subsample = c(0.5, 1),
+#   colsample_bytree = c(0.5, 1),
+#   min_child_weight = c(exp(-2), exp(3))
+# )
+# 
+# # Define the objective function
+# objective_function <- function(max_depth, eta, subsample, colsample_bytree, min_child_weight) {
+#   # Transform log-scale parameters back to normal scale
+#   eta <- exp(eta)
+#   min_child_weight <- exp(min_child_weight)
+#   
+#   # Define XGBoost parameters
+#   params <- list(
+#     objective = "binary:logistic",
+#     eval_metric = "logloss",
+#     max_depth = as.integer(max_depth),
+#     eta = eta,
+#     subsample = subsample,
+#     colsample_bytree = colsample_bytree,
+#     min_child_weight = min_child_weight
+#   )
+#   
+#   # Perform cross-validation
+#   cv_results <- xgb.cv(
+#     params = params,
+#     data = dtrain,
+#     nrounds = 100,
+#     nfold = 5,
+#     verbose = FALSE,
+#     early_stopping_rounds = 10
+#   )
+#   
+#   # Return the logloss
+#   list(Score = min(cv_results$evaluation_log$test_logloss_mean),
+#        Pred = min(cv_results$evaluation_log$test_logloss_mean))
+# }
+# 
+# # Run Bayesian Optimization
+# opt_results <- bayesOpt(
+#   FUN = objective_function,
+#   bounds = search_space,
+#   initPoints = 10,  # Initial random points
+#   iters.n = 500,     # Iterations
+#   acq = "ucb"       # Acquisition function
+# )
+# 
+# # Pull optimal parameters from Bayesian Optimization results
+# final_params <- function(best_params) {
+#   list(
+#     objective = "binary:logistic",          # Binary classification
+#     eval_metric = "logloss",               # Use logloss as evaluation metric
+#     max_depth = as.integer(best_params$max_depth),
+#     eta = best_params$eta,
+#     colsample_bytree = best_params$colsample_bytree,
+#     subsample = best_params$subsample,
+#     min_child_weight = best_params$min_child_weight
+#   )
+# }
+# 
+# # Use the best parameters for pooled data
+# best_params_pooled <- getBestPars(opt_results)  # Best parameters for pooled model
+# params_pooled <- final_params(best_params_pooled)
+# 
+# # ----------------------
+# # Repeat Bayesian Optimization and Model Training for Male and Female Subsamples
+# # ----------------------
+# 
+# # Female-Specific Optimization and Training
+# objective_function_female <- function(max_depth, eta, subsample, colsample_bytree, min_child_weight) {
+#   eta <- exp(eta)
+#   min_child_weight <- exp(min_child_weight)
+#   
+#   params <- list(
+#     objective = "binary:logistic",
+#     eval_metric = "logloss",
+#     max_depth = as.integer(max_depth),
+#     eta = eta,
+#     subsample = subsample,
+#     colsample_bytree = colsample_bytree,
+#     min_child_weight = min_child_weight
+#   )
+#   
+#   cv_results <- xgb.cv(
+#     params = params,
+#     data = dtrain_f,
+#     nrounds = 100,
+#     nfold = 5,
+#     verbose = FALSE,
+#     early_stopping_rounds = 10
+#   )
+#   
+#   list(Score = min(cv_results$evaluation_log$test_logloss_mean),
+#        Pred = min(cv_results$evaluation_log$test_logloss_mean))
+# }
+# 
+# opt_results_female <- bayesOpt(
+#   FUN = objective_function_female,
+#   bounds = search_space,
+#   initPoints = 10,
+#   iters.n = 500,
+#   acq = "ucb"
+# )
+# 
+# best_params_female <- getBestPars(opt_results_female)  # Best parameters for female model
+# params_female <- final_params(best_params_female)
+# # 
+# # Male-Specific Optimization and Training
+# objective_function_male <- function(max_depth, eta, subsample, colsample_bytree, min_child_weight) {
+#   eta <- exp(eta)
+#   min_child_weight <- exp(min_child_weight)
+#   
+#   params <- list(
+#     objective = "binary:logistic",
+#     eval_metric = "logloss",
+#     max_depth = as.integer(max_depth),
+#     eta = eta,
+#     subsample = subsample,
+#     colsample_bytree = colsample_bytree,
+#     min_child_weight = min_child_weight
+#   )
+#   
+#   cv_results <- xgb.cv(
+#     params = params,
+#     data = dtrain_m,
+#     nrounds = 100,
+#     nfold = 5,
+#     verbose = FALSE,
+#     early_stopping_rounds = 10
+#   )
+#   
+#   list(Score = min(cv_results$evaluation_log$test_logloss_mean),
+#        Pred = min(cv_results$evaluation_log$test_logloss_mean))
+# }
+# 
+# opt_results_male <- bayesOpt(
+#   FUN = objective_function_male,
+#   bounds = search_space,
+#   initPoints = 10,
+#   iters.n = 500,
+#   acq = "ucb"
+# )
+# 
+# best_params_male <- getBestPars(opt_results_male)  # Best parameters for male model
+# params_male <- final_params(best_params_male)
+
+# Load tuned params:
+params_pooled <- readRDS("best_params_pooled.RDS")
+params_female <- readRDS("best_params_female.RDS")
+params_male <- readRDS("best_params_male.RDS")
+
+params_pooled$max_depth <- round(params_pooled$max_depth,0)
+params_female$max_depth <- round(params_female$max_depth,0)
+params_male$max_depth <- round(params_male$max_depth,0)
+
+print(params_pooled)
+print(params_female)
+print(params_male)
+
+```
+
+## Training and Plotting
+
+Now I train and plot the outputs. I focus on two outputs--plots of the receiver operating characteristic curves (to visualize the important AUC values), and a replication of figure 1 from the paper. There is nothing in particular to note from these outputs, as the fake data does not have an economic interpretation. Still, it is easy to imagine how the approach in the original paper can be used to analyze data in empirical papers.
+
+```{r training}
+# Set seed for reproducibility
+set.seed(123)
+
+# Load tuned params:
+params_pooled <- readRDS("best_params_pooled.RDS")
+params_female <- readRDS("best_params_female.RDS")
+params_male <- readRDS("best_params_male.RDS")
+
+params_pooled$max_depth <- round(params_pooled$max_depth,0)
+params_female$max_depth <- round(params_female$max_depth,0)
+params_male$max_depth <- round(params_male$max_depth,0)
+
+# Load data
+panel <- readRDS("panel.RDS")
+
+## arrange for grouping
+panel <- panel %>% arrange(gender)
+
+# Add unique identifier to the dataset
+panel$id <- 1:nrow(panel)
+
+# tabulate count by gender
+table(panel$gender)
+
+# Result:
+# 0     1 
+# 46731 76269
+
+f_indices <- 1:46731
+m_indices <- 46732:123000
+
+panel_f <- panel[f_indices,]
+panel_m <- panel[m_indices,]
+
+# Pull
+y <- panel$y
+
+# Train-test split
+train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+
+# Exclude the "id" and "y" column for training and testing
+X_train <- panel[train_index, !(names(panel) %in% c("id","y"))]
+y_train <- y[train_index]
+X_test <- panel[-train_index, !(names(panel) %in% c("id","y"))]
+y_test <- y[-train_index]
+
+# Convert to xgb.DMatrix format
+dtrain <- xgb.DMatrix(data = as.matrix(X_train), label = y_train)
+dtest <- xgb.DMatrix(data = as.matrix(X_test), label = y_test)
+
+# Female-specific train-test split
+train_index_f <- train_index[train_index %in% f_indices]
+test_index_f <- f_indices[!(f_indices %in% train_index_f)]
+
+# Exclude "id" and "y" columns for female data
+X_train_f <- panel[train_index_f, !(names(panel) %in% c("id", "y"))]
+y_train_f <- y[train_index_f]
+X_test_f <- panel[test_index_f, !(names(panel) %in% c("id", "y"))]
+y_test_f <- y[test_index_f]
+
+# Convert female data to xgb.DMatrix format
+dtrain_f <- xgb.DMatrix(data = as.matrix(X_train_f), label = y_train_f)
+dtest_f <- xgb.DMatrix(data = as.matrix(X_test_f), label = y_test_f)
+
+# Male-specific train-test split
+train_index_m <- train_index[train_index %in% m_indices]
+test_index_m <- m_indices[!(m_indices %in% train_index_m)]
+
+# Exclude "id" and "y" columns for male data
+X_train_m <- panel[train_index_m, !(names(panel) %in% c("id", "y"))]
+y_train_m <- y[train_index_m]
+X_test_m <- panel[test_index_m, !(names(panel) %in% c("id", "y"))]
+y_test_m <- y[test_index_m]
+
+# Convert male data to xgb.DMatrix format
+dtrain_m <- xgb.DMatrix(data = as.matrix(X_train_m), label = y_train_m)
+dtest_m <- xgb.DMatrix(data = as.matrix(X_test_m), label = y_test_m)
+
+################################################################
+
+
+# Train the pooled model
+watchlist <- list(train = dtrain, test = dtest)
+bst_pooled <- xgb.train(
+  params = params_pooled,
+  data = dtrain,
+  nrounds = 500,      # Number of boosting rounds
+  early_stopping_rounds = 10,
+  watchlist = watchlist,
+  verbose = 1
+)
+
+# Train the female model
+watchlist_f <- list(train = dtrain_f, test = dtest_f)
+bst_female <- xgb.train(
+  params = params_female,
+  data = dtrain_f,
+  nrounds = 500,      # Number of boosting rounds
+  early_stopping_rounds = 10,
+  watchlist = watchlist_f,
+  verbose = 1
+)
+
+# Train the male model
+watchlist_m <- list(train = dtrain_m, test = dtest_m)
+bst_male <- xgb.train(
+  params = params_male,
+  data = dtrain_m,
+  nrounds = 500,      # Number of boosting rounds
+  early_stopping_rounds = 10,
+  watchlist = watchlist_m,
+  verbose = 1
+)
+
+# Predict probabilities on the test data
+pred_probs_pooled <- predict(bst_pooled, dtest)
+pred_probs_female <- predict(bst_female, dtest_f)
+pred_probs_male <- predict(bst_male, dtest_m)
+
+# Convert probabilities to binary predictions (threshold = 0.5)
+pred_labels_pooled <- ifelse(pred_probs_pooled > 0.2, 1, 0)
+pred_labels_female <- ifelse(pred_probs_female > 0.2, 1, 0)
+pred_labels_male <- ifelse(pred_probs_male > 0.2, 1, 0)
+
+# Compute ROC curves for pooled, female, and male models
+roc_curve_pooled <- roc(y_test, pred_probs_pooled)
+roc_curve_female <- roc(y_test_f, pred_probs_female)
+roc_curve_male <- roc(y_test_m, pred_probs_male)
+
+# Plot the ROC curve for the pooled model
+plot(roc_curve_pooled, col = "blue", lwd = 2, main = "ROC Curves for Pooled, Female, and Male Models", 
+     xlab = "False Positive Rate", ylab = "True Positive Rate")
+abline(a = 0, b = 1, lty = 2, col = "gray")  # Diagonal line for reference
+
+# Add the female model ROC curve
+plot(roc_curve_female, col = "red", lwd = 2, add = TRUE)
+
+# Add the male model ROC curve
+plot(roc_curve_male, col = "green", lwd = 2, add = TRUE)
+
+# Add a legend to distinguish between models
+legend("bottomright", 
+       legend = c("Pooled Model", "Female Model", "Male Model"), 
+       col = c("blue", "red", "green"), 
+       lwd = 2)
+
+print(auc(roc_curve_pooled))
+print(auc(roc_curve_female))
+print(auc(roc_curve_male))
+
+## Comparison plot
+
+# Extract test IDs and genders for the pooled test set
+test_ids <- panel[-train_index, "id"]
+test_genders <- panel[-train_index, "gender"]
+
+# Initialize the dataframe with test IDs and genders
+results <- data.frame(
+  id = test_ids,
+  gender = test_genders,
+  pooled_prob = pred_probs_pooled,  # Add probabilities from the pooled model
+  gender_specific_prob = NA         # Initialize gender-specific probabilities as NA
+)
+
+# Populate gender-specific probabilities based on gender
+results$gender_specific_prob <- ifelse(
+  results$gender == 0, 
+  pred_probs_female[match(results$id, panel[test_index_f, "id"])],  # Female-specific probs
+  pred_probs_male[match(results$id, panel[test_index_m, "id"])]     # Male-specific probs
+)
+
+# Create the scatter plot with female points on top
+ggplot() +
+  # Male points (plotted first)
+  geom_point(data = results[results$gender == 1, ],
+             aes(x = pooled_prob, y = gender_specific_prob),
+             color = "blue", alpha = 0.25) +  # Male points (blue)
+  # Female points (plotted second)
+  geom_point(data = results[results$gender == 0, ],
+             aes(x = pooled_prob, y = gender_specific_prob),
+             color = "red", alpha = 0.25) +  # Female points (red)
+  # Dashed lines
+  geom_vline(xintercept = 0.2, linetype = "dashed", color = "black") +
+  geom_hline(yintercept = 0.2, linetype = "dashed", color = "black") +
+  # Labels and legend
+  labs(
+    title = "Scatter Plot of Pooled vs Gender-Specific Default Probabilities",
+    x = "Pooled Default Probability",
+    y = "Gender-Specific Default Probability"
+  ) +
+  theme_minimal()  # Minimal theme
+
+
+```
+
+\newpage
+
+# References
+
+Bergstra, James & Komer, Brent & Eliasmith, Chris & Yamins, Dan & Cox, David. (2015). Hyperopt: A Python library for model selection and hyperparameter optimization. Computational Science & Discovery. 8. 014008. 10.1088/1749-4699/8/1/014008. 
+
+Chioda, Laura and Gertler, Paul and Higgins, Sean and Medina, Paolina C. (2024). FinTech Lending to Borrowers with No Credit History. National Bureau of Economic Research Working Paper Series. http://www.nber.org/papers/w33208
+
+Snoek, J., Larochelle, H., & Adams, R. P. (2012). Practical bayesian optimization of machine learning algorithms. Advances in neural information processing systems, 25.
+
